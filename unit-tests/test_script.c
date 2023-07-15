@@ -1,0 +1,863 @@
+#include <stdarg.h>
+#include <stddef.h>
+#include <setjmp.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <stdio.h>
+
+#include <cmocka.h>
+
+// missing definitions to make it compile without the SDK
+unsigned int pic(unsigned int linked_address) {
+    return linked_address;
+}
+
+#define PRINTF(...) printf
+#define PIC(x)      (x)
+
+#include "common/script.h"
+
+static void test_get_script_type_valid(void **state) {
+    (void) state;
+
+    uint8_t p2pkh[] = {OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG};
+    assert_int_equal(get_script_type(p2pkh, sizeof(p2pkh)), SCRIPT_TYPE_P2PKH);
+
+    uint8_t p2sh[] = {OP_HASH160, 0x14, 0x01, 0x02, 0x03, 0x04, 0x05,    0x06,
+                      0x07,       0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,    0x0e,
+                      0x0f,       0x10, 0x11, 0x12, 0x13, 0x14, OP_EQUAL};
+    assert_int_equal(get_script_type(p2sh, sizeof(p2sh)), SCRIPT_TYPE_P2SH);
+    /*
+    uint8_t p2wpkh[] = {OP_0, 0x14, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                        0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14};
+    assert_int_equal(get_script_type(p2wpkh, sizeof(p2wpkh)), SCRIPT_TYPE_P2WPKH);
+
+    uint8_t p2wsh[] = {OP_0, 0x20, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+                       0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+                       0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20};
+    assert_int_equal(get_script_type(p2wsh, sizeof(p2wsh)), SCRIPT_TYPE_P2WSH);
+
+    uint8_t p2tr[] = {OP_1, 0x20, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+                      0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+                      0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20};
+    assert_int_equal(get_script_type(p2tr, sizeof(p2tr)), SCRIPT_TYPE_P2TR);
+
+    // unknown (but valid) segwit scriptPubKeys
+    uint8_t unknown1[] = {OP_0, 0x2, 0x01, 0x02};
+    assert_int_equal(get_script_type(unknown1, sizeof(unknown1)), SCRIPT_TYPE_UNKNOWN_SEGWIT);
+    uint8_t unknown2[] = {OP_16, 0x20, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+                          0x0b,  0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+                          0x17,  0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20};
+    assert_int_equal(get_script_type(unknown2, sizeof(unknown2)), SCRIPT_TYPE_UNKNOWN_SEGWIT);
+    */
+}
+
+static void test_get_script_type_invalid(void **state) {
+    (void) state;
+
+    uint8_t opreturn[] = {OP_RETURN, OP_0};  // valid OP_RETURN, but it doesn't have an address
+    assert_int_equal(get_script_type(opreturn, sizeof(opreturn)), -1);
+
+    assert_int_equal(get_script_type(opreturn, 0), -1);  // empty script is invalid
+
+    uint8_t p2pkh_short[] = {
+        OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03, 0x04, 0x05,
+        0x06,   0x07,       0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+        0x0e,   0x0f,       0x10, 0x11, 0x12, 0x13, 0x14, OP_EQUALVERIFY};  // missing OP_CHECKSIG
+    assert_int_equal(get_script_type(p2pkh_short, sizeof(p2pkh_short)), -1);
+
+    uint8_t p2pkh_long[] = {OP_DUP, OP_HASH160, 0x14,           0x01,        0x02,  0x03, 0x04,
+                            0x05,   0x06,       0x07,           0x08,        0x09,  0x0a, 0x0b,
+                            0x0c,   0x0d,       0x0e,           0x0f,        0x10,  0x11, 0x12,
+                            0x13,   0x14,       OP_EQUALVERIFY, OP_CHECKSIG, OP_NOP};  // extra byte
+    //XNA can have more at end
+    //assert_int_equal(get_script_type(p2pkh_long, sizeof(p2pkh_long)), -1);
+
+    uint8_t p2sh_short[] = {OP_HASH160, 0x14, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+                            0x07,       0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+                            0x0f,       0x10, 0x11, 0x12, 0x13, 0x14};  // missing OP_EQUAL
+    assert_int_equal(get_script_type(p2sh_short, sizeof(p2sh_short)), -1);
+
+    uint8_t p2sh_long[] = {OP_HASH160, 0x14, 0x01, 0x02, 0x03,     0x04,  0x05, 0x06, 0x07,
+                           0x08,       0x09, 0x0a, 0x0b, 0x0c,     0x0d,  0x0e, 0x0f, 0x10,
+                           0x11,       0x12, 0x13, 0x14, OP_EQUAL, OP_NOP};  // extra byte
+    //XNA can have more at end 
+    //assert_int_equal(get_script_type(p2sh_long, sizeof(p2sh_long)), -1);
+
+    /*
+    uint8_t p2wpkh_short[] = {
+        OP_0, 0x14, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+        0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13};  // one byte too short
+    assert_int_equal(get_script_type(p2wpkh_short, sizeof(p2wpkh_short)), -1);
+
+    uint8_t p2wpkh_long[] = {OP_0, 0x14, 0x01, 0x02, 0x03, 0x04, 0x05,  0x06,
+                             0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,  0x0e,
+                             0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, OP_NOP};  // one byte too long
+    assert_int_equal(get_script_type(p2wpkh_long, sizeof(p2wpkh_long)), -1);
+
+    uint8_t p2wsh_short[] = {
+        OP_0, 0x20, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+        0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+        0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f};  // one byte too short
+    assert_int_equal(get_script_type(p2wsh_short, sizeof(p2wsh_short)), -1);
+
+    uint8_t p2wsh_long[] = {
+        OP_0, 0x20, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,  0x0a,
+        0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,  0x16,
+        0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, OP_NOP};  // one byte too long
+    assert_int_equal(get_script_type(p2wsh_long, sizeof(p2wsh_long)), -1);
+
+    uint8_t p2tr_short[] = {
+        OP_1, 0x20, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+        0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+        0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f};  // one byte too short
+    assert_int_equal(get_script_type(p2tr_short, sizeof(p2tr_short)), -1);
+
+    uint8_t p2tr_long[] = {OP_1, 0x20, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,  0x0a,
+                           0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,  0x16,
+                           0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, OP_NOP};
+    assert_int_equal(get_script_type(p2tr_long, sizeof(p2tr_long)), -1);
+
+    // segwit witness program must be at least 2 bytes
+    uint8_t segwit_too_short[] = {OP_1, 0x01, 0x01};
+    assert_int_equal(get_script_type(segwit_too_short, sizeof(segwit_too_short)), -1);
+
+    // segwit witness program must be at most 40 bytes
+    uint8_t segwit_too_long[] = {OP_16, 41, 0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12,
+                                 13,    14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+                                 28,    29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 41};
+    assert_int_equal(get_script_type(segwit_too_long, sizeof(segwit_too_long)), -1);
+    */
+}
+
+#define CHECK_VALID_TESTCASE(script, expected)                         \
+    {                                                                  \
+        char out[MAX_OPRETURN_OUTPUT_DESC_SIZE];                       \
+        int ret = format_opscript_script(script, sizeof(script), out); \
+        assert_int_equal(ret, sizeof(expected));                       \
+        assert_string_equal(out, expected);                            \
+    }
+
+#define CHECK_INVALID_TESTCASE(script)                                 \
+    {                                                                  \
+        char out[MAX_OPRETURN_OUTPUT_DESC_SIZE];                       \
+        int ret = format_opscript_script(script, sizeof(script), out); \
+        assert_int_equal(ret, -1);                                     \
+    }
+
+static void test_format_opscript_script_valid(void **state) {
+    (void) state;
+
+    uint8_t input0[] = {OP_RETURN, OP_0};
+    CHECK_VALID_TESTCASE(input0, "OP_RETURN 0");
+    uint8_t input1[] = {OP_RETURN, OP_1};
+    CHECK_VALID_TESTCASE(input1, "OP_RETURN 1");
+    uint8_t input2[] = {OP_RETURN, OP_2};
+    CHECK_VALID_TESTCASE(input2, "OP_RETURN 2");
+    uint8_t input3[] = {OP_RETURN, OP_3};
+    CHECK_VALID_TESTCASE(input3, "OP_RETURN 3");
+    uint8_t input4[] = {OP_RETURN, OP_4};
+    CHECK_VALID_TESTCASE(input4, "OP_RETURN 4");
+    uint8_t input5[] = {OP_RETURN, OP_5};
+    CHECK_VALID_TESTCASE(input5, "OP_RETURN 5");
+    uint8_t input6[] = {OP_RETURN, OP_6};
+    CHECK_VALID_TESTCASE(input6, "OP_RETURN 6");
+    uint8_t input7[] = {OP_RETURN, OP_7};
+    CHECK_VALID_TESTCASE(input7, "OP_RETURN 7");
+    uint8_t input8[] = {OP_RETURN, OP_8};
+    CHECK_VALID_TESTCASE(input8, "OP_RETURN 8");
+    uint8_t input9[] = {OP_RETURN, OP_9};
+    CHECK_VALID_TESTCASE(input9, "OP_RETURN 9");
+    uint8_t input10[] = {OP_RETURN, OP_10};
+    CHECK_VALID_TESTCASE(input10, "OP_RETURN 10");
+    uint8_t input11[] = {OP_RETURN, OP_11};
+    CHECK_VALID_TESTCASE(input11, "OP_RETURN 11");
+    uint8_t input12[] = {OP_RETURN, OP_12};
+    CHECK_VALID_TESTCASE(input12, "OP_RETURN 12");
+    uint8_t input13[] = {OP_RETURN, OP_13};
+    CHECK_VALID_TESTCASE(input13, "OP_RETURN 13");
+    uint8_t input14[] = {OP_RETURN, OP_14};
+    CHECK_VALID_TESTCASE(input14, "OP_RETURN 14");
+    uint8_t input15[] = {OP_RETURN, OP_15};
+    CHECK_VALID_TESTCASE(input15, "OP_RETURN 15");
+    uint8_t input16[] = {OP_RETURN, OP_16};
+    CHECK_VALID_TESTCASE(input16, "OP_RETURN 16");
+
+    uint8_t input17[] = {OP_RETURN, 1, 0x42};
+    CHECK_VALID_TESTCASE(input17, "OP_RETURN 0x42");
+
+    uint8_t input18[] = {OP_RETURN, 5, 0x11, 0x22, 0x33, 0x44, 0x55};
+    CHECK_VALID_TESTCASE(input18, "OP_RETURN 0x1122334455");
+
+    uint8_t input19[] = {OP_RETURN, 75, 0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13,
+                         14,        15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+                         30,        31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+                         46,        47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61,
+                         62,        63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74};
+    CHECK_VALID_TESTCASE(
+        input19,
+        "OP_RETURN "
+        "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425"
+        "262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a");
+
+    uint8_t input20[] = {OP_RETURN, OP_PUSHDATA1, 7, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+    CHECK_VALID_TESTCASE(input20, "OP_RETURN 0x01020304050607");
+
+    uint8_t input21[] = {OP_RETURN, OP_PUSHDATA1, 80, 0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10,
+                         11,        12,           13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+                         25,        26,           27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+                         39,        40,           41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52,
+                         53,        54,           55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66,
+                         67,        68,           69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79};
+    CHECK_VALID_TESTCASE(
+        input21,
+        "OP_RETURN "
+        "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b"
+        "2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f");
+
+    uint8_t input22[] = {OP_RETURN, OP_1NEGATE};
+    CHECK_VALID_TESTCASE(input22, "OP_RETURN -1");
+}
+
+//#include "legacy/include/btchip_helpers.h"
+
+/* TODO: 
+CMake was giving me some issues so I just did a copy-paste job
+*/
+
+static bool is_ascii(unsigned char c) {
+    return c < INT8_MAX && c >= 0x20;
+}
+
+static bool increment_and_check_ptr(unsigned int* ptr, int amt, size_t size) {
+    *ptr += amt;
+    return *ptr >= size || *ptr > INT8_MAX;
+}
+
+static signed char btchip_output_script_try_get_neurai_asset_tag_type(unsigned char *buffer, size_t size) {
+    int i;
+    if (/*  These aren't the focus of these tests, we will always assume they are valid p2pkh, p2sh
+
+            btchip_output_script_is_regular(buffer) ||
+            btchip_output_script_is_p2sh(buffer) ||
+            btchip_output_script_is_op_return(buffer) || */
+            size < 6 ||
+            (buffer[1] != 0xC0)) {
+        return -1;
+    }
+    if (buffer[2] == 0x50) {
+        if (buffer[3] == 0x50) {
+            //Global restriction
+            if (buffer[5] > 31 || buffer[5] < 3) {
+                return -3;
+            }
+            if (6 + buffer[5] > size) {
+                return -3;
+            }
+            for (i = 0; i < buffer[5]; i++) {
+                if (!is_ascii(buffer[6+i])) {
+                    return -3;
+                }
+            }
+            return 3;
+        }
+        //Restricted string
+        if (buffer[4] > 80 || buffer[4] == 0) {
+            return -2;
+        }
+        if (5 + buffer[4] > size) {
+            return -2;
+        }
+        for (i = 0; i < buffer[4]; i++) {
+            if (!is_ascii(buffer[5+i])) {
+                return -2;
+            }
+        }
+        return 2;
+    }
+    //Tagging
+    if (buffer[2] != 0x14 || buffer[2] + 4 >= size || buffer[buffer[2] + 4] > 31 || buffer[buffer[2] + 4] < 3) {
+        return -1;
+    }
+    if (buffer[2] + 5 + buffer[buffer[2] + 4] > size) {
+        return -1;
+    }
+    for (i = 0; i < buffer[buffer[2] + 4]; i++) {
+        if (!is_ascii(buffer[buffer[2] + 5 + i])) {
+            return -1;
+        }
+    }
+    return 1;
+}
+
+static signed char btchip_output_script_get_neurai_asset_ptr(unsigned char *buffer, size_t size) {
+    // This method is also used in check_output_displayable and needs to ensure no overflows happen from bad scripts
+    unsigned int script_ptr = 1; // The script length is a varint; always less than 0xFC -> skip first
+    unsigned int final_op = buffer[0], i;
+    signed char script_start;
+    unsigned char script_type, asset_len;
+
+    if (final_op >= size || buffer[final_op] != 0x75) {
+        return -1;
+    }
+
+    if (buffer[24] == 0xC0) {
+        script_ptr = 25;
+    } else if (buffer[26] == 0xC0) {
+        script_ptr = 27;
+    } else {
+        return -2;
+    }
+
+    if ((buffer[script_ptr+1] == 0x72) &&
+        (buffer[script_ptr+2] == 0x76) &&
+        (buffer[script_ptr+3] == 0x6E)) {
+        script_ptr += 4;
+    } else if ((buffer[script_ptr+2] == 0x72) &&
+        (buffer[script_ptr+3] == 0x76) &&
+        (buffer[script_ptr+4] == 0x6E)) {
+        script_ptr += 5;
+    } else {
+        return -3;
+    }
+    
+    script_start = script_ptr;
+    script_type = buffer[script_ptr];
+    if (
+        //Not any known script type
+        !(   
+            script_type == 0x71 ||
+            script_type == 0x6F ||
+            script_type == 0x72 ||
+            script_type == 0x74      
+        )
+        //Or out of bounds
+        ||
+        increment_and_check_ptr(&script_ptr, 1, size)
+    ) {
+        return -4;
+    }
+
+    asset_len = buffer[script_ptr];
+    if (asset_len > 31 || asset_len < 3) {
+        return -5;
+    }
+
+    for (i = 0; i < asset_len; i++) {
+        if(increment_and_check_ptr(&script_ptr, 1, size)) {
+            return -12;
+        }
+        if (!is_ascii(buffer[script_ptr])) {
+            return -13;
+        }
+        //Ownership assets must end in '!'
+        if (script_type == 0x6F && i == asset_len - 1 && buffer[script_ptr] != '!') {
+            return -15;
+        }
+    }
+    if(increment_and_check_ptr(&script_ptr, 1, size)) {
+        return -14;
+    }
+
+    if (script_type != 0x6F) {
+        if (increment_and_check_ptr(&script_ptr, 8, size)) {
+            return -6;
+        }
+        if (script_type != 0x74) {
+            //Divisibility & reissuability
+            if (increment_and_check_ptr(&script_ptr, 2, size)) {
+                return -9;
+            }
+            if (script_type == 0x72) {
+                if (buffer[script_ptr] != 0x75) {
+                    if (increment_and_check_ptr(&script_ptr, 34, size)) {
+                        return -10;
+                    }
+                    if (buffer[script_ptr] != 0x75) {
+                        return -11;
+                    }
+                }
+            } else {
+                if (buffer[script_ptr]) {
+                    if (increment_and_check_ptr(&script_ptr, 35, size)) {
+                        return -10;
+                    }
+                } else {
+                    if (increment_and_check_ptr(&script_ptr, 1, size)) {
+                        return -11;
+                    }
+                }
+            }
+        } else {
+            //Transfer
+
+            // IPFS vout attachment
+            if (buffer[script_ptr] != 0x75) {
+                if (increment_and_check_ptr(&script_ptr, 34, size)) {
+                    return -7;
+                }
+            }
+            // IPFS timestamp
+            if (buffer[script_ptr] != 0x75) {
+                if (increment_and_check_ptr(&script_ptr, 4, size)) {
+                    return -8;
+                }
+            }
+        }
+    }
+
+    //Must end with OP_DROP
+    if (buffer[script_ptr] != 0x75) {
+        return -9;
+    }
+
+    return script_start;
+}
+
+
+static void test_neurai_asset_script_valid(void **state) {
+    (void) state;
+    // Minimum asset len of 3                   V SCRIPT LENGTH
+    uint8_t p2pkh_asset_transfer_min_name[] = {44, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 0x10,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x03,
+                       0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_transfer_min_name, sizeof(p2pkh_asset_transfer_min_name)) > 0);
+
+    // Maximum asset len of 31
+    uint8_t p2pkh_asset_transfer_max_name[] = {72, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 44,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_transfer_max_name, sizeof(p2pkh_asset_transfer_max_name)) > 0);
+
+
+    uint8_t p2sh_asset_transfer_min_name[] = {42, OP_HASH160, 0x14, 0x01, 0x02, 0x03, 0x04, 0x05,    0x06,
+                      0x07,       0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,    0x0e,
+                      0x0f,       0x10, 0x11, 0x12, 0x13, 0x14, OP_EQUAL,
+                       OP_XNA_ASSET, 0x10,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x03,
+                       0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2sh_asset_transfer_min_name, sizeof(p2sh_asset_transfer_min_name)) > 0);
+
+
+    uint8_t p2sh_asset_transfer_max_name[] = {70, OP_HASH160, 0x14, 0x01, 0x02, 0x03, 0x04, 0x05,    0x06,
+                      0x07,       0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,    0x0e,
+                      0x0f,       0x10, 0x11, 0x12, 0x13, 0x14, OP_EQUAL,
+                       OP_XNA_ASSET, 44,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2sh_asset_transfer_max_name, sizeof(p2sh_asset_transfer_max_name)) > 0);
+    /* We calculate where 0xc0 is based on the script type. Once we confirm these ^ work we are good to go to just check the script types */
+
+    uint8_t p2pkh_asset_transfer_with_ipfs[] = {78, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 40,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x03,
+                       0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x12, 0x20, 0x84, 0x43, 0xbc, 0xbb, 0x6a, 0x01, 0x18, 0xae, 0xbf, 0xcf, 0xe9, 0x1c, 0x12, 0x5d, 0x6e,
+                       0x58, 0xa8, 0x76, 0x93, 0xb7, 0x3d, 0x08, 0xf7, 0x7d, 0x77, 0xf6, 0xe7, 0x8f, 0xa2, 0x29, 0x56, 0x3c,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_transfer_with_ipfs, sizeof(p2pkh_asset_transfer_with_ipfs)) > 0);
+
+    uint8_t p2pkh_asset_transfer_with_ipfs_timestamp[] = {82, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 44,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x03,
+                       0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x12, 0x20, 0x84, 0x43, 0xbc, 0xbb, 0x6a, 0x01, 0x18, 0xae, 0xbf, 0xcf, 0xe9, 0x1c, 0x12, 0x5d, 0x6e,
+                       0x58, 0xa8, 0x76, 0x93, 0xb7, 0x3d, 0x08, 0xf7, 0x7d, 0x77, 0xf6, 0xe7, 0x8f, 0xa2, 0x29, 0x56, 0x3c,
+                       0, 0, 0, 0,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_transfer_with_ipfs_timestamp, sizeof(p2pkh_asset_transfer_with_ipfs_timestamp)) > 0);
+
+    uint8_t p2pkh_asset_owner[] = {37, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 0x09,
+                       0x72, 0x76, 0x6E,
+                       0x6F,
+                       0x04,
+                       0x72, 0x72, 0x72, 0x21,
+                       0x75};
+
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_owner, sizeof(p2pkh_asset_owner)) > 0);
+
+    uint8_t p2pkh_asset_create[] = {109, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 47+34,
+                       0x72, 0x76, 0x6E,
+                       0x71,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0, 1, 1,
+                       0x12, 0x20, 0x84, 0x43, 0xbc, 0xbb, 0x6a, 0x01, 0x18, 0xae, 0xbf, 0xcf, 0xe9, 0x1c, 0x12, 0x5d, 0x6e,
+                       0x58, 0xa8, 0x76, 0x93, 0xb7, 0x3d, 0x08, 0xf7, 0x7d, 0x77, 0xf6, 0xe7, 0x8f, 0xa2, 0x29, 0x56, 0x3c,
+                       0x75};
+
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_create, sizeof(p2pkh_asset_create)) > 0);
+
+    uint8_t p2pkh_asset_create_no_ipfs[] = {109-34, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 47,
+                       0x72, 0x76, 0x6E,
+                       0x71,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0, 1, 0,
+                       0x75};
+
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_create_no_ipfs, sizeof(p2pkh_asset_create_no_ipfs)) > 0);
+    
+
+    uint8_t p2pkh_asset_reissue_no_ipfs[] = {109-34-1, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 47,
+                       0x72, 0x76, 0x6E,
+                       0x72,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0xff, 1,
+                       0x75};
+
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_reissue_no_ipfs, sizeof(p2pkh_asset_reissue_no_ipfs)) > 0);
+
+    uint8_t p2pkh_asset_reissue[] = {109-1, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 47,
+                       0x72, 0x76, 0x6E,
+                       0x72,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0xff, 1,
+                       0x12, 0x20, 0x84, 0x43, 0xbc, 0xbb, 0x6a, 0x01, 0x18, 0xae, 0xbf, 0xcf, 0xe9, 0x1c, 0x12, 0x5d, 0x6e,
+                       0x58, 0xa8, 0x76, 0x93, 0xb7, 0x3d, 0x08, 0xf7, 0x7d, 0x77, 0xf6, 0xe7, 0x8f, 0xa2, 0x29, 0x56, 0x3c,
+                       0x75};
+
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_reissue_no_ipfs, sizeof(p2pkh_asset_reissue_no_ipfs)) > 0);
+
+    uint8_t null_tag[] = {56, OP_XNA_ASSET, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, 
+                       0x20,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0
+                       };
+
+    assert_true(btchip_output_script_try_get_neurai_asset_tag_type(null_tag, sizeof(null_tag)) > 0);
+
+    uint8_t verifier_tag[] = {8, OP_XNA_ASSET, 0x50, 0x5, 0x4, 0x72, 0x72, 0x72, 0x72,};
+
+    assert_true(btchip_output_script_try_get_neurai_asset_tag_type(verifier_tag, sizeof(verifier_tag)) > 0);
+
+    uint8_t verifier_tag_max[] = {85, OP_XNA_ASSET, 0x50, 81, 80, 
+                        0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                        0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                        0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                        0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                        0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72};
+
+    assert_true(btchip_output_script_try_get_neurai_asset_tag_type(verifier_tag_max, sizeof(verifier_tag_max)) > 0);
+
+
+    uint8_t global_freeze[] = {10, OP_XNA_ASSET, 0x50, 0x50, 0x6, 0x4, 0x72, 0x72, 0x72, 0x72, 0};
+
+    assert_true(btchip_output_script_try_get_neurai_asset_tag_type(global_freeze, sizeof(global_freeze)) > 0);
+
+}   
+
+static void test_neurai_asset_script_invalid(void **state) {
+    (void) state;
+
+    uint8_t p2pkh_asset_transfer_small_name[] = {43, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 0x9,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x02,
+                       0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_transfer_small_name, sizeof(p2pkh_asset_transfer_small_name)) < 0);
+
+uint8_t p2pkh_asset_transfer_big_name[] = {73, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 45,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x20,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_transfer_big_name, sizeof(p2pkh_asset_transfer_big_name)) < 0);
+
+
+    uint8_t p2sh_asset_transfer_bad_len[] = {43, OP_HASH160, 0x14, 0x01, 0x02, 0x03, 0x04, 0x05,    0x06,
+                      0x07,       0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,    0x0e,
+                      0x0f,       0x10, 0x11, 0x12, 0x13, 0x14, OP_EQUAL,
+                       OP_XNA_ASSET, 0x10,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x03,
+                       0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2sh_asset_transfer_bad_len, sizeof(p2sh_asset_transfer_bad_len)) < 0);
+
+
+    uint8_t p2sh_asset_transfer_bad_name_len[] = {69, OP_HASH160, 0x14, 0x01, 0x02, 0x03, 0x04, 0x05,    0x06,
+                      0x07,       0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,    0x0e,
+                      0x0f,       0x10, 0x11, 0x12, 0x13, 0x14, OP_EQUAL,
+                       OP_XNA_ASSET, 44,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2sh_asset_transfer_bad_name_len, sizeof(p2sh_asset_transfer_bad_name_len)) < 0);
+    /* We calculate where 0xc0 is based on the script type. Once we confirm these ^ work we are good to go to just check the script types */
+
+    uint8_t p2pkh_asset_transfer_with_bad_ipfs[] = {79, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 41,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x03,
+                       0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x12, 0x20, 0x84, 0x43, 0xbc, 0xbb, 0x6a, 0x01, 0x18, 0xae, 0xbf, 0xcf, 0xe9, 0x1c, 0x12, 0x5d, 0x6e,
+                       0x58, 0xa8, 0x76, 0x93, 0xb7, 0x3d, 0x08, 0xf7, 0x7d, 0x77, 0xf6, 0xe7, 0x8f, 0xa2, 0x29, 0x56, 0x3c, 0,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_transfer_with_bad_ipfs, sizeof(p2pkh_asset_transfer_with_bad_ipfs)) < 0);
+
+    uint8_t p2pkh_asset_transfer_with_small_ipfs[] = {81, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 43,
+                       0x72, 0x76, 0x6E,
+                       0x74,
+                       0x03,
+                       0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0x12, 0x20, 0x84, 0x43, 0xbc, 0xbb, 0x6a, 0x01, 0x18, 0xae, 0xbf, 0xcf, 0xe9, 0x1c, 0x12, 0x5d, 0x6e,
+                       0x58, 0xa8, 0x76, 0x93, 0xb7, 0x3d, 0x08, 0xf7, 0x7d, 0x77, 0xf6, 0xe7, 0x8f, 0xa2, 0x29, 0x56,
+                       0, 0, 0, 0,
+                       0x75};
+    
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_transfer_with_small_ipfs, sizeof(p2pkh_asset_transfer_with_small_ipfs)) < 0);
+
+    uint8_t p2pkh_asset_owner_no_exc[] = {37, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 0x09,
+                       0x72, 0x76, 0x6E,
+                       0x6F,
+                       0x04,
+                       0x72, 0x72, 0x72, 0x72,
+                       0x75};
+
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_owner_no_exc, sizeof(p2pkh_asset_owner_no_exc)) < 0);
+
+    uint8_t p2pkh_asset_wrong_type[] = {109, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 47+34,
+                       0x72, 0x76, 0x6E,
+                       0x72,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0, 1, 1,
+                       0x12, 0x20, 0x84, 0x43, 0xbc, 0xbb, 0x6a, 0x01, 0x18, 0xae, 0xbf, 0xcf, 0xe9, 0x1c, 0x12, 0x5d, 0x6e,
+                       0x58, 0xa8, 0x76, 0x93, 0xb7, 0x3d, 0x08, 0xf7, 0x7d, 0x77, 0xf6, 0xe7, 0x8f, 0xa2, 0x29, 0x56, 0x3c,
+                       0x75};
+
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_wrong_type, sizeof(p2pkh_asset_wrong_type)) < 0);
+
+    uint8_t p2pkh_asset_create_no_ipfs_extra_byte[] = {109-33, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 48,
+                       0x72, 0x76, 0x6E,
+                       0x71,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0, 1, 0, 0,
+                       0x75};
+
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_create_no_ipfs_extra_byte, sizeof(p2pkh_asset_create_no_ipfs_extra_byte)) < 0);
+    
+
+    uint8_t p2pkh_asset_reissue_no_ipfs_extra_byte[] = {109-34, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 48,
+                       0x72, 0x76, 0x6E,
+                       0x72,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0xff, 1,0,
+                       0x75};
+
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_reissue_no_ipfs_extra_byte, sizeof(p2pkh_asset_reissue_no_ipfs_extra_byte)) < 0);
+
+    uint8_t p2pkh_asset_reissue_but_not_xna[] = {109-1, OP_DUP, OP_HASH160, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, OP_EQUALVERIFY, OP_CHECKSIG,
+                       OP_XNA_ASSET, 47,
+                       0x72, 0x76, 0,
+                       0x72,
+                       0x1F,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00,
+                       0xff, 1,
+                       0x12, 0x20, 0x84, 0x43, 0xbc, 0xbb, 0x6a, 0x01, 0x18, 0xae, 0xbf, 0xcf, 0xe9, 0x1c, 0x12, 0x5d, 0x6e,
+                       0x58, 0xa8, 0x76, 0x93, 0xb7, 0x3d, 0x08, 0xf7, 0x7d, 0x77, 0xf6, 0xe7, 0x8f, 0xa2, 0x29, 0x56, 0x3c,
+                       0x75};
+
+    assert_true(btchip_output_script_get_neurai_asset_ptr(p2pkh_asset_reissue_but_not_xna, sizeof(p2pkh_asset_reissue_but_not_xna)) < 0);
+
+    uint8_t null_tag_large_name[] = {57, OP_XNA_ASSET, 0x14, 0x01, 0x02, 0x03,           0x04,       0x05, 0x06,
+                       0x07,   0x08,       0x09, 0x0a, 0x0b, 0x0c,           0x0d,       0x0e, 0x0f,
+                       0x10,   0x11,       0x12, 0x13, 0x14, 
+                       0x20,
+                       0x20,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                       0
+                       };
+
+    assert_true(btchip_output_script_try_get_neurai_asset_tag_type(null_tag_large_name, sizeof(null_tag_large_name)) < 0);
+
+    uint8_t verifier_tag_over_80[] = {86, OP_XNA_ASSET, 0x50, 82, 81, 
+                        0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                        0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                        0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                        0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                        0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72, 0x72,
+                        0x72,};
+
+    assert_true(btchip_output_script_try_get_neurai_asset_tag_type(verifier_tag_over_80, sizeof(verifier_tag_over_80)) < 0);
+
+    uint8_t global_freeze_bad_len[] = {10, OP_XNA_ASSET, 0x50, 0x50, 0x50, 0x7, 0x4, 0x72, 0x72, 0x72, 0x72, 0};
+
+    assert_true(btchip_output_script_try_get_neurai_asset_tag_type(global_freeze_bad_len, sizeof(global_freeze_bad_len)) < 0);
+
+
+}
+
+static void test_format_opscript_script_invalid(void **state) {
+    (void) state;
+
+    uint8_t input_empty[] = {0};  // can't declare 0-length array
+    char out[MAX_OPRETURN_OUTPUT_DESC_SIZE];
+    assert_int_equal(format_opscript_script(input_empty, 0, out), -1);
+
+    uint8_t input_no_push[] = {OP_RETURN};
+    CHECK_INVALID_TESTCASE(input_no_push);
+
+    uint8_t input_not_opreturn[] = {OP_DUP};
+    CHECK_INVALID_TESTCASE(input_not_opreturn);
+
+    uint8_t input_op_reserved[] = {OP_RETURN, OP_RESERVED};
+    CHECK_INVALID_TESTCASE(input_op_reserved);
+
+    // valid OP_RETURN with OP_PUSHDATA2, but we don't support it
+    uint8_t input_pushdata2[] =
+        {OP_RETURN, OP_PUSHDATA2, 0x06, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06};
+    CHECK_INVALID_TESTCASE(input_pushdata2);
+
+    // valid OP_RETURN with OP_PUSHDATA4, but we don't support it
+    uint8_t input_pushdata4[] =
+        {OP_RETURN, OP_PUSHDATA4, 0x06, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06};
+    CHECK_INVALID_TESTCASE(input_pushdata4);
+
+    uint8_t input_extra_push[] = {OP_RETURN, OP_0, OP_0};
+    CHECK_INVALID_TESTCASE(input_extra_push);
+
+    uint8_t input_extra_push2[] = {OP_RETURN, 4, 1, 2, 3, 4, 42};
+    CHECK_INVALID_TESTCASE(input_extra_push2);
+}
+
+int main() {
+    const struct CMUnitTest tests[] = {
+        cmocka_unit_test(test_get_script_type_valid),
+        cmocka_unit_test(test_get_script_type_invalid),
+        cmocka_unit_test(test_format_opscript_script_valid),
+        cmocka_unit_test(test_format_opscript_script_invalid),
+        cmocka_unit_test(test_neurai_asset_script_valid),
+        cmocka_unit_test(test_neurai_asset_script_invalid),
+    };
+
+    return cmocka_run_group_tests(tests, NULL, NULL);
+}
